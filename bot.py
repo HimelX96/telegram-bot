@@ -36,14 +36,15 @@ def handle_start(message):
             "Authorization": f"Bearer {SUPABASE_KEY}"
         }
         
-        supabase_query_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}&select=message_id"
+        # ডেটাবেজ থেকে telegram_parts কলাম ফেচ করা
+        supabase_query_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}&select=telegram_parts"
         
         try:
             response = requests.get(supabase_query_url, headers=headers)
             data = response.json()
             
-            if data and len(data) > 0:
-                channel_message_id = int(data[0]['message_id'])
+            if data and len(data) > 0 and data[0]['telegram_parts']:
+                channel_message_id = int(data[0]['telegram_parts'])
                 
                 bot.copy_message(
                     chat_id=message.chat.id,
@@ -67,11 +68,35 @@ def handle_save(message):
             movie_id = text_parts[1]
             forwarded_msg_id = message.reply_to_message.message_id
             
-            bot.reply_to(message, f"✅ Received! Movie ID: {movie_id}, Message ID: {forwarded_msg_id}\n(Now update this in your Supabase table)")
+            headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            }
+            
+            # সুপাবেজের telegram_parts কলামে মেসেজ আইডি আপডেট করার URL
+            supabase_update_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}"
+            payload = {
+                "telegram_parts": str(forwarded_msg_id)
+            }
+            
+            try:
+                # ডেটাবেজে রিকোয়েস্ট পাঠানো
+                response = requests.patch(supabase_update_url, json=payload, headers=headers)
+                
+                if response.status_code in [200, 204]:
+                    bot.reply_to(message, f"✅ Success! Movie ID: {movie_id} matched with Telegram Message ID: {forwarded_msg_id} and saved to database.")
+                else:
+                    bot.reply_to(message, f"⚠️ Failed to update database. Status code: {response.status_code}")
+                    
+            except Exception as e:
+                bot.reply_to(message, "⚠️ An error occurred while saving to database!")
+                
         else:
-            bot.reply_to(message, "⚠️ Please provide the Movie ID after /save command (e.g., /save 116)")
+            bot.reply_to(message, "⚠️ Please provide the Movie ID after /save command (e.g., /save 23)")
     else:
-      bot.reply_to(message, "⚠️ Please reply to the movie file/post with /save <movie_id>")
+        bot.reply_to(message, "⚠️ Please reply to the movie file/post with /save <movie_id>")
 
 if __name__ == '__main__':
     # ফ্লাস্ক সার্ভার আলাদা থ্রেডে চালু করা যাতে পোলিং ব্লক না হয়
