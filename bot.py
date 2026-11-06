@@ -87,15 +87,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title = movie.get("title", "Unknown Title")
             year = movie.get("year", "")
             
-            # Extract download link directly or from 'downloads' JSON array
-            file_link = movie.get("link") or movie.get("magnet") or movie.get("url")
+            # শুধুমাত্র টেলিগ্রাম বা ডিরেক্ট ফাইল লিংক খুঁজবে, ম্যাগনেট লিংক স্কিপ করবে
+            file_link = None
             
-            if not file_link and "downloads" in movie and isinstance(movie["downloads"], list) and len(movie["downloads"]) > 0:
-                first_dl = movie["downloads"][0]
-                file_link = first_dl.get("link") or first_dl.get("url") or first_dl.get("magnet")
+            candidate_links = [
+                movie.get("telegram_link"),
+                movie.get("tg_link"),
+                movie.get("stream_link"),
+                movie.get("link"),
+                movie.get("url")
+            ]
+            
+            for cl in candidate_links:
+                if cl and not cl.startswith("magnet:?"):
+                    file_link = cl
+                    break
+            
+            # যদি মেইন লিংকে না থাকে, তবে 'downloads' অ্যারে চেক করবে কিন্তু ম্যাগনেট বাদ দিয়ে
+            if not file_link and "downloads" in movie and isinstance(movie["downloads"], list):
+                for dl in movie["downloads"]:
+                    dl_link = dl.get("link") or dl.get("url") or dl.get("telegram")
+                    if dl_link and not dl_link.startswith("magnet:?"):
+                        file_link = dl_link
+                        break
             
             if not file_link:
-                file_link = "No direct link available"
+                file_link = "No direct Telegram file link available."
             
             # Final success message
             await status_message.edit_text(
