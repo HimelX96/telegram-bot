@@ -104,4 +104,11 @@ if __name__ == '__main__':
     flask_thread.start()
     
     print("Bot is starting in polling mode with web server...")
-    bot.infinity_polling()
+    
+    # আগের কোনো সেশন বা কনফ্লিক্ট থাকলে রিমুভ করে নতুন করে পোলিং শুরু করা
+    try:
+        bot.remove_webhook()
+    except:
+        pass
+        
+    bot.infinity_polling(skip_pending=True)
