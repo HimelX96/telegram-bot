@@ -3,7 +3,7 @@ import requests
 from flask import Flask, request
 import telebot
 
-# ১. বট টোকেন এবং সুপাবেজ ক্রিপডেনশিয়াল সেটআপ
+# ১. বট টোকেন এবং সুপাবেজ ক্রেডেনশিয়াল সেটআপ
 TOKEN = os.environ.get('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
@@ -27,14 +27,14 @@ def handle_start(message):
     text_parts = message.text.split()
     
     if len(text_parts) > 1:
-        movie_id = text_parts[1]  # যেমন: movie_116 বা শুধু 116
+        movie_id = text_parts[1]  # যেমন: 116
         
         headers = {
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}"
         }
         
-        # সুপাবেজ টেবिल 'movies_vault' থেকে id বা slug দিয়ে message_id খোঁজা
+        # সুপাবেজ টেবিল 'movies_vault' থেকে id দিয়ে message_id খোঁজা
         supabase_query_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}&select=message_id"
         
         try:
@@ -60,21 +60,20 @@ def handle_start(message):
         # সাধারণ /start মেসেজ
         bot.reply_to(message, "👋 Welcome to Piracy Vault!\n\nPlease browse our official website and click the 'Telegram' button on any movie or series to access your content.")
 
-# ৩. /save কমান্ড (চ্যানেল থেকে কোনো পোস্ট বা ফাইল ফরওয়ার্ড করে সহজে ডেটাবেজে কানেক্ট করার জন্য)
+# ৩. /save কমান্ড (চ্যানেল থেকে কোনো পোস্ট বা ফাইল ফরোয়ার্ড করে সহজে ডেটাবেজে কানেক্ট করার জন্য)
 @bot.message_handler(commands=['save'])
 def handle_save(message):
-    # তুমি চ্যানেলের ফাইলটি বটে ফরোয়ার্ড করে ক্যাপশনে লিখে দিতে পারੋ: /save 116
     if message.reply_to_message:
         text_parts = message.text.split()
         if len(text_parts) > 1:
             movie_id = text_parts[1]
-            forwarded_msg_id = message.reply_to_message.message_id # অথবা চ্যানেলের রিয়েল মেসেজ আইডি
+            forwarded_msg_id = message.reply_to_message.message_id
             
             bot.reply_to(message, f"✅ Received! Movie ID: {movie_id}, Message ID: {forwarded_msg_id}\n(Now update this in your Supabase table)")
         else:
             bot.reply_to(message, "⚠️ Please provide the Movie ID after /save command (e.g., /save 116)")
     else:
-        bot.reply_to(message, "⚠️ Please reply to the movie file/post with /save <movie_id>")
+      bot.reply_to(message, "⚠️ Please reply to the movie file/post with /save <movie_id>")
 
 @app.route('/')
 def index():
