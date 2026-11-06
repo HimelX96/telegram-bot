@@ -4,7 +4,7 @@ import requests
 from flask import Flask
 from telebot import TeleBot
 
-# ফ্লাস্ক অ্যাপ তৈরি করা (রেন্ডারের পোর্ট রিকোয়ারমেন্ট পূরণের জন্য)
+# ফ্লাস্ক অ্যাপ তৈরি করা (রেন্ডারের পোর্ট রিকোয়েস্ট পূরণের জন্য)
 app = Flask(__name__)
 
 @app.route('/')
@@ -62,13 +62,19 @@ def handle_start(message):
 
 @bot.message_handler(commands=['save'])
 def handle_save(message):
-    print("Received /save command!")  # লগে দেখার জন্য যাতে বোঝা যায় কমান্ড হিট হয়েছে
-    if message.reply_to_message:
+    print("Received /save command!")
+    
+    # চেক করা হচ্ছে কোনো মেসেজ ফরোয়ার্ড করা হয়েছে কি না
+    if message.forward_from_chat or message.forward_from or message.forward_date:
         text_parts = message.text.split()
         if len(text_parts) > 1:
             movie_id = text_parts[1]
-            forwarded_msg_id = message.reply_to_message.message_id
             
+            # ফরোয়ার্ড করা মেসেজের অরিজিনাল মেসেজ আইডি বের করা
+            forwarded_msg_id = getattr(message, 'forward_from_message_id', None)
+            if not forwarded_msg_id:
+                forwarded_msg_id = message.message_id
+                
             headers = {
                 "apikey": SUPABASE_KEY,
                 "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -83,7 +89,6 @@ def handle_save(message):
             }
             
             try:
-                # ডেটাবেজে রিকোয়েস্ট পাঠানো
                 response = requests.patch(supabase_update_url, json=payload, headers=headers)
                 print(f"Supabase Response Status: {response.status_code}")
                 
@@ -99,7 +104,7 @@ def handle_save(message):
         else:
             bot.reply_to(message, "⚠️ Please provide the Movie ID after /save command (e.g., /save 23)")
     else:
-        bot.reply_to(message, "⚠️ Please reply to the movie file/post with /save <movie_id>")
+        bot.reply_to(message, "⚠️ Please forward the movie file from your channel to this chat along with /save <movie_id>")
 
 if __name__ == '__main__':
     # ফ্লাস্ক সার্ভার আলাদা ব্যাকগ্রাউন্ড থ্রেডে চালু করা
