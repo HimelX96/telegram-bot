@@ -78,10 +78,10 @@ def handle_save(message):
     if len(text_parts) > 1:
         movie_id = text_parts[1]
         
-        # প্রথমে চেক করি মেসেজটি সরাসরি ক্যাপশনসহ ফরোয়ার্ড করা হয়েছে কি না
+        # প্রথমে চেক করি মেসেজটি সরাসরি ক্যাপশনসহ ফরোয়ার্ড করা হয়েছে কি না
         forwarded_msg_id = getattr(message, 'forward_from_message_id', None)
         
-        # যদি ক্যাপশন ছাড়া আলাদা ফরোয়ার্ড করা হয়, তবে মেমোরি থেকে আইডি নিই
+        # যদি ক্যাপশন ছাড়া আলাদা ফরোয়ার্ড করা হয়, তবে মেমোরি থেকে আইডি নিই
         if not forwarded_msg_id and message.chat.id in user_last_forwarded:
             forwarded_msg_id = user_last_forwarded[message.chat.id]
             
@@ -93,7 +93,7 @@ def handle_save(message):
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json",
-            "Prefer": "return=minimal"
+            "Prefer": "return=representation"  # সুপাবেজ যেন আপডেট হওয়া ডেটা রিটার্ন করে
         }
         
         # সুপাবেজের telegram_parts কলামে মেসেজ আইডি আপডেট করার URL
@@ -104,15 +104,21 @@ def handle_save(message):
         
         try:
             response = requests.patch(supabase_update_url, json=payload, headers=headers)
-            print(f"Supabase Response Status: {response.status_code}")
+            print(f"Supabase Status: {response.status_code}")
+            print(f"Supabase Response: {response.text}")
             
             if response.status_code in [200, 204]:
-                bot.reply_to(message, f"✅ Success! Movie ID: {movie_id} matched with Telegram Message ID: {forwarded_msg_id} and saved to database.")
+                res_data = response.json() if response.text else []
+                if res_data:
+                    bot.reply_to(message, f"✅ Success! Movie ID: {movie_id} matched with Telegram Message ID: {forwarded_msg_id} and saved to database.")
+                else:
+                    bot.reply_to(message, f"⚠️ Supabase returned success, but no rows were updated. Check if ID {movie_id} exists or check RLS policies!")
+                
                 # সেভ হয়ে গেলে ডিকশনারি থেকে ক্লিয়ার করে দিই
                 if message.chat.id in user_last_forwarded:
                     del user_last_forwarded[message.chat.id]
             else:
-                bot.reply_to(message, f"⚠️ Failed to update database. Status code: {response.status_code}")
+                bot.reply_to(message, f"⚠️ Failed to update database. Status: {response.status_code}, Msg: {response.text}")
                 
         except Exception as e:
             print(f"Error saving to db: {e}")
