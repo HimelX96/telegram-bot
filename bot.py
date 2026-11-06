@@ -1,141 +1,107 @@
 import os
-import threading
-import requests
-from flask import Flask
-from telebot import TeleBot
+from flask import Flask, request
+import httpx
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ফ্লাস্ক অ্যাপ তৈরি করা (রেন্ডারের পোর্ট রিকোয়েস্ট পূরণের জন্য)
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Bot is alive and running!"
+# Environment variables
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # Ekhane Service Role Key use korbe
 
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+# Temporary memory to store recent file/album IDs per chat
+latest_file_cache = {}
 
-# টেলিগ্রাম বট সেটআপ
-TOKEN = "8859026903:AAGIx3xypVJ_XASWBSjxWDjmYkdVE_SO5U4"
-bot = TeleBot(TOKEN)
+SUPABASE_HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+}
 
-SUPABASE_URL = os.environ.get('SUPABASE_URL')
-SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
-
-PRIVATE_CHANNEL_ID = -1004460747665  # তোমার প্রাইভেট চ্যানেলের আইডি
-
-# ইউজারের শেষ ফরোয়ার্ড করা মেসেজ আইডি মনে রাখার জন্য ডিকশনারি
-user_last_forwarded = {}
-
-@bot.message_handler(commands=['start'])
-def handle_start(message):
-    text_parts = message.text.split()
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message
     
-    if len(text_parts) > 1:
-        movie_id = text_parts[1]
-        
-        headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}"
-        }
-        
-        # ডেটাবেজ থেকে telegram_parts কলাম ফেচ করা
-        supabase_query_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}&select=telegram_parts"
-        
-        try:
-            response = requests.get(supabase_query_url, headers=headers)
-            data = response.json()
-            
-            if data and len(data) > 0 and data[0].get('telegram_parts'):
-                channel_message_id = int(data[0]['telegram_parts'])
-                
-                bot.copy_message(
-                    chat_id=message.chat.id,
-                    from_chat_id=PRIVATE_CHANNEL_ID,
-                    message_id=channel_message_id
-                )
-            else:
-                bot.reply_to(message, f"❌ Sorry! File not found in database for ID: {movie_id}")
-                
-        except Exception as e:
-            bot.reply_to(message, "⚠️ An error occurred while fetching your file!")
-            
-    else:
-        bot.reply_to(message, "👋 Welcome to Piracy Vault!\n\nPlease browse our official website and click the 'Telegram' button on any movie or series to access your content.")
+    file_id = None
+    media_group_id = message.media_group_id
 
-# ফরোয়ার্ড করা ফাইল ট্র্যাক করার হ্যান্ডলার
-@bot.message_handler(content_types=['document', 'video', 'audio', 'photo'])
-def handle_forwarded_files(message):
-    if message.forward_from_chat or message.forward_from:
-        user_last_forwarded[message.chat.id] = message.message_id
-        bot.reply_to(message, "📥 File received! Now reply or send `/save <movie_id>` to link this file.")
+    # Check file type (Document, Video, Audio etc.)
+    if message.document:
+        file_id = message.document.file_id
+    elif message.video:
+        file_id = message.video.file_id
+    elif message.audio:
+        file_id = message.audio.file_id
 
-@bot.message_handler(commands=['save'])
-def handle_save(message):
-    print("Received /save command!")
-    text_parts = message.text.split()
+    if file_id:
+        if chat_id not in latest_file_cache:
+            latest_file_cache[chat_id] = []
+        
+        # Jodi album ba ekadhik file ashe, list-e add hote thakbe
+        if file_id not in latest_file_cache[chat_id]:
+            latest_file_cache[chat_id].append(file_id)
+        
+        file_count = len(latest_file_cache[chat_id])
+        await message.reply_text(f"File cached! Total queued: {file_count}. Now send `/save <movie_id>` to store them sequentially.")
+
+async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     
-    if len(text_parts) > 1:
-        movie_id = text_parts[1]
+    if chat_id not in latest_file_cache or not latest_file_cache[chat_id]:
+        await update.message.reply_text("Kono file cache kora nei! Prothome file ba album forward karo.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Sothik niyome command dao! Uddahoron: `/save 23`", parse_mode="Markdown")
+        return
+
+    movie_id = context.args[0]
+    new_file_ids = latest_file_cache[chat_id]
+
+    # 1. Prothome database theke check korbo age ki data ache
+    get_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}&select=telegram_parts"
+    
+    async with httpx.AsyncClient() as client:
+        res = await client.get(get_url, headers=SUPABASE_HEADERS)
         
-        # প্রথমে চেক করি মেসেজটি সরাসরি ক্যাপশনসহ ফরোয়ার্ড করা হয়েছে কি না
-        forwarded_msg_id = getattr(message, 'forward_from_message_id', None)
+        existing_parts = ""
+        if res.status_code == 200 and res.json():
+            row = res.json()[0]
+            existing_parts = row.get("telegram_parts") or ""
+
+        # 2. Purono parts er sathe notun file ID gulo comma diye serial-wise jure dibo
+        new_parts_str = ",".join(new_file_ids)
         
-        # যদি ক্যাপশন ছাড়া আলাদা ফরোয়ার্ড করা হয়, তবে মেমোরি থেকে আইডি নিই
-        if not forwarded_msg_id and message.chat.id in user_last_forwarded:
-            forwarded_msg_id = user_last_forwarded[message.chat.id]
-            
-        if not forwarded_msg_id:
-            bot.reply_to(message, "⚠️ Please forward a file from your channel first, then send /save <movie_id>")
-            return
-            
-        headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"  # সুপাবেজ যেন আপডেট হওয়া ডেটা রিটার্ন করে
-        }
+        if existing_parts:
+            # Jodi age thekei kisu thake, tar sathe comma diye notun gulo append hobe
+            updated_parts = f"{existing_parts},{new_parts_str}"
+        else:
+            updated_parts = new_parts_str
+
+        # 3. Supabase-e PATCH (Update) request pathabo
+        patch_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}"
+        payload = {"telegram_parts": updated_parts}
         
-        # সুপাবেজের telegram_parts কলামে মেসেজ আইডি আপডেট করার URL
-        supabase_update_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}"
-        payload = {
-            "telegram_parts": str(forwarded_msg_id)
-        }
-        
-        try:
-            response = requests.patch(supabase_update_url, json=payload, headers=headers)
-            print(f"Supabase Status: {response.status_code}")
-            print(f"Supabase Response: {response.text}")
-            
-            if response.status_code in [200, 204]:
-                res_data = response.json() if response.text else []
-                if res_data:
-                    bot.reply_to(message, f"✅ Success! Movie ID: {movie_id} matched with Telegram Message ID: {forwarded_msg_id} and saved to database.")
-                else:
-                    bot.reply_to(message, f"⚠️ Supabase returned success, but no rows were updated. Check if ID {movie_id} exists or check RLS policies!")
-                
-                # সেভ হয়ে গেলে ডিকশনারি থেকে ক্লিয়ার করে দিই
-                if message.chat.id in user_last_forwarded:
-                    del user_last_forwarded[message.chat.id]
-            else:
-                bot.reply_to(message, f"⚠️ Failed to update database. Status: {response.status_code}, Msg: {response.text}")
-                
-        except Exception as e:
-            print(f"Error saving to db: {e}")
-            bot.reply_to(message, "⚠️ An error occurred while saving to database!")
-            
-    else:
-        bot.reply_to(message, "⚠️ Please provide the Movie ID after /save command (e.g., /save 23)")
+        update_res = await client.patch(patch_url, json=payload, headers=SUPABASE_HEADERS)
+
+        if update_res.status_code in [200, 204]:
+            # Cache clear kore dibo save howar por
+            latest_file_cache[chat_id] = []
+            await update.message.reply_text(f"Success! Movie ID {movie_id}-e serial parts successfully save/update hoyeche: `{updated_parts}`", parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"Failed to update database: {update_res.text}")
+
+# Telegram bot initialization setup (python-telegram-bot v20+)
+def main():
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    application.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.AUDIO, handle_message))
+    application.add_handler(CommandHandler("save", save_command))
+
+    application.run_polling()
 
 if __name__ == '__main__':
-    # ফ্লাস্ক সার্ভার আলাদা ব্যাকগ্রাউন্ড থ্রেডে চালু করা
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    print("Bot is starting polling...")
-    try:
-        bot.remove_webhook()
-    except Exception as e:
-        print(f"Webhook remove error: {e}")
-        
-    bot.infinity_polling(skip_pending=True)
+    main()
