@@ -1,42 +1,117 @@
 import os
-from flask import Flask
-from threading import Thread
+import logging
+import httpx
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-app_web = Flask('')
+# Logging configuration
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-@app_web.route('/')
-def home():
-    return "Piracy Vault Bot is Alive and Running!"
+# Supabase Credentials (Fetch from environment variables)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-def run_flask():
-    app_web.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+async def fetch_movie_from_supabase(movie_id: str):
+    """Fetches movie details from Supabase using the given movie ID."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        logger.error("Supabase credentials are missing in environment variables!")
+        return None
 
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}&select=*"
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                if data and len(data) > 0:
+                    return data[0]
+    except Exception as e:
+        logger.error(f"Error connecting to Supabase: {e}")
+        
+    return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args 
-    if args and args[0] == "spider_man":
-        await update.message.reply_text("Fetching your movie files, please wait a moment...")
-        
-        chat_id = "@vault96_bot"
-        file_message_ids = [101, 102, 103, 104, 105]
-        
-        for msg_id in file_message_ids:
-            await context.bot.copy_message(
-                chat_id=update.effective_chat.id,
-                from_chat_id=chat_id,
-                message_id=msg_id
+    user = update.effective_user
+    args = context.args  # Captures deep link argument (e.g., movie_[id])
+    
+    if args:
+        param = args[0]
+        if param.startswith("movie_"):
+            movie_id = param.split("_")[1]
+            logger.info(f"User {user.id} (Username: {user.username}) requested movie ID: {movie_id}")
+            
+            # Send searching status message
+            status_message = await update.message.reply_text(
+                f"🎬 Request received for Movie ID: `{movie_id}`.\n"
+                f"🔍 Searching our vault for your file. Please wait...",
+                parse_mode="Markdown"
             )
-    else:
-        await update.message.reply_text("Welcome to Piracy Vault! Please click the correct movie link from our website to access your content.")
+            
+            # Fetch movie record from Supabase
+            movie = await fetch_movie_from_supabase(movie_id)
+            
+            if not movie:
+                await status_message.edit_text(
+                    f"⚠️ **Oops! Movie Not Found**\n\n"
+                    f"We couldn't find any file matching ID: `{movie_id}` in our vault.\n"
+                    f"It might have been removed or the link is outdated. Please check back on the website.",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            # Extract details safely
+            title = movie.get("title", "Unknown Title")
+            year = movie.get("year", "")
+            
+            # Extract download link directly or from 'downloads' JSON array
+            file_link = movie.get("link") or movie.get("magnet") or movie.get("url")
+            
+            if not file_link and "downloads" in movie and isinstance(movie["downloads"], list) and len(movie["downloads"]) > 0:
+                first_dl = movie["downloads"][0]
+                file_link = first_dl.get("link") or first_dl.get("url") or first_dl.get("magnet")
+            
+            if not file_link:
+                file_link = "No direct link available"
+            
+            # Final success message
+            await status_message.edit_text(
+                f"✅ **File Found Successfully!**\n\n"
+                f"🎬 **Title:** {title} ({year})\n\n"
+                f"📥 **Download Link:**\n{file_link}\n\n"
+                f"Enjoy your media! Powered by **Piracy Vault**.",
+                parse_mode="Markdown"
+            )
+            return
 
-if __name__ == '__main__':
-    keep_alive()
-    TOKEN = os.environ.get("BOT_TOKEN")
+    # Default /start message
+    await update.message.reply_text(
+        f"👋 Welcome to **Piracy Vault**, {user.first_name}!\n\n"
+        f"Please browse our official website and click the **'Get on Telegram'** button on any movie card to securely access your content.",
+        parse_mode="Markdown"
+    )
+
+def main():
+    TOKEN = os.getenv("BOT_TOKEN")
+    
+    if not TOKEN:
+        logger.error("BOT_TOKEN environment variable is missing!")
+        return
+
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
+
+    logger.info("Bot is starting up...")
     application.run_polling()
+
+if __name__ == "__main__":
+    main()
