@@ -43,7 +43,7 @@ def handle_start(message):
             response = requests.get(supabase_query_url, headers=headers)
             data = response.json()
             
-            if data and len(data) > 0 and data[0]['telegram_parts']:
+            if data and len(data) > 0 and data[0].get('telegram_parts'):
                 channel_message_id = int(data[0]['telegram_parts'])
                 
                 bot.copy_message(
@@ -62,6 +62,7 @@ def handle_start(message):
 
 @bot.message_handler(commands=['save'])
 def handle_save(message):
+    print("Received /save command!")  # লগে দেখার জন্য যাতে বোঝা যায় কমান্ড হিট হয়েছে
     if message.reply_to_message:
         text_parts = message.text.split()
         if len(text_parts) > 1:
@@ -84,6 +85,7 @@ def handle_save(message):
             try:
                 # ডেটাবেজে রিকোয়েস্ট পাঠানো
                 response = requests.patch(supabase_update_url, json=payload, headers=headers)
+                print(f"Supabase Response Status: {response.status_code}")
                 
                 if response.status_code in [200, 204]:
                     bot.reply_to(message, f"✅ Success! Movie ID: {movie_id} matched with Telegram Message ID: {forwarded_msg_id} and saved to database.")
@@ -91,6 +93,7 @@ def handle_save(message):
                     bot.reply_to(message, f"⚠️ Failed to update database. Status code: {response.status_code}")
                     
             except Exception as e:
+                print(f"Error saving to db: {e}")
                 bot.reply_to(message, "⚠️ An error occurred while saving to database!")
                 
         else:
@@ -99,16 +102,14 @@ def handle_save(message):
         bot.reply_to(message, "⚠️ Please reply to the movie file/post with /save <movie_id>")
 
 if __name__ == '__main__':
-    # ফ্লাস্ক সার্ভার আলাদা থ্রেডে চালু করা যাতে পোলিং ব্লক না হয়
-    flask_thread = threading.Thread(target=run_flask)
+    # ফ্লাস্ক সার্ভার আলাদা ব্যাকগ্রাউন্ড থ্রেডে চালু করা
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    print("Bot is starting in polling mode with web server...")
-    
-    # আগের কোনো সেশন বা কনফ্লিক্ট থাকলে রিমুভ করে নতুন করে পোলিং শুরু করা
+    print("Bot is starting polling...")
     try:
         bot.remove_webhook()
-    except:
-        pass
+    except Exception as e:
+        print(f"Webhook remove error: {e}")
         
     bot.infinity_polling(skip_pending=True)
