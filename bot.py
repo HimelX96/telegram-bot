@@ -19,7 +19,7 @@ SUPABASE_HEADERS = {
     "Prefer": "return=representation"
 }
 
-# 1. File cache kora
+# ১. ফাইল বা জিপ ক্যাশ করা
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     message = update.message
@@ -40,86 +40,63 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             latest_file_cache[chat_id].append(file_id)
         
         file_count = len(latest_file_cache[chat_id])
-        await message.reply_text(f"Cached! Total queued: {file_count}. Now send `/saveseason <id> <season_no> <start_ep>`")
+        await message.reply_text(f"File cached! Total queued: {file_count}. Now send command: `/save <movie_id> <quality>`\nExample: `/save 62 remux`")
 
-# 2. Season-wise episode save korar command
-async def save_season_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ২. কোয়ালিটি অনুযায়ী সেভ করার কমান্ড
+async def save_quality_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
     if chat_id not in latest_file_cache or not latest_file_cache[chat_id]:
-        await update.message.reply_text("Kono file cache kora nei! Prothome episode gulo forward karo.")
+        await update.message.reply_text("কোনো ফাইল ক্যাশ করা নেই! প্রথমে ফাইল বা জিপ ফরোয়ার্ড করো।")
         return
 
-    if len(context.args) < 3:
-        await update.message.reply_text("Sothik niyome command dao! Udahoron: `/saveseason <movie_id> <season_no> <start_ep>`\nJemon: `/saveseason 55 1 1`", parse_mode="Markdown")
+    if len(context.args) < 2:
+        await update.message.reply_text("সঠিক নিয়মে কমান্ড দাও! উদাহরণ: `/save <movie_id> <quality>`\nযেমন: `/save 62 remux` বা `/save 62 webdl`", parse_mode="Markdown")
         return
 
     movie_id = context.args[0]
-    target_season = int(context.args[1])
-    start_ep = int(context.args[2])
+    quality_name = context.args[1].upper()  # REMUX বা WEB-DL
     
     file_ids = latest_file_cache[chat_id]
+    # যদি একাধিক পার্ট বা জিপ থাকে লিস্ট থাকবে, ১টা থাকলে সিঙ্গেল স্ট্রিং
+    file_payload = file_ids[0] if len(file_ids) == 1 else file_ids
 
-    # Database theke purono JSON data anha
+    # ডাটাবেজ থেকে আগের ডাটা আনা
     get_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}&select=episode_download"
     
     async with httpx.AsyncClient() as client:
         res = await client.get(get_url, headers=SUPABASE_HEADERS)
         
-        seasons_list = []
+        qualities_list = []
         if res.status_code == 200 and res.json():
             row = res.json()[0]
-            seasons_list = row.get("episode_download") or []
-            if not isinstance(seasons_list, list):
-                seasons_list = []
+            qualities_list = row.get("episode_download") or []
+            if not isinstance(qualities_list, list):
+                qualities_list = []
 
-        # 3. Target season khuje ber kora ba na thakle notun toiri kora
-        season_obj = None
-        for s in seasons_list:
-            if s.get("season_number") == target_season:
-                season_obj = s
+        # কোয়ালিটি অলরেডি আছে কি না চেক করে আপডেট বা নতুন যোগ করা
+        q_found = False
+        for item in qualities_list:
+            if item.get("quality") == quality_name:
+                item["telegram_file_id"] = file_payload
+                q_found = True
                 break
         
-        if not season_obj:
-            season_obj = {
-                "season_number": target_season,
-                "episodes": []
-            }
-            seasons_list.append(season_obj)
+        if not q_found:
+            qualities_list.append({
+                "quality": quality_name,
+                "telegram_file_id": file_payload
+            })
 
-        # 4. Episode gulo season-er `episodes` array-te serial-wise add kora
-        existing_episodes = season_obj.get("episodes", [])
-        
-        for index, f_id in enumerate(file_ids):
-            current_ep_num = start_ep + index
-            
-            # Jodi oi episode number age thekei thake, update kore dibo
-            ep_found = False
-            for ep in existing_episodes:
-                if ep.get("episode_number") == current_ep_num:
-                    ep["telegram_file_id"] = f_id
-                    ep_found = True
-                    break
-            
-            if not ep_found:
-                existing_episodes.append({
-                    "episode_number": current_ep_num,
-                    "telegram_file_id": f_id,
-                    "title": f"Season {target_season} Episode {current_ep_num}",
-                    "quality": "1080p REMUX"
-                })
-        
-        season_obj["episodes"] = existing_episodes
-
-        # 5. Supabase-e update (PATCH) kora
+        # সুপাবেজে PATCH (Update) করা
         patch_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}"
-        payload = {"episode_download": seasons_list}
+        payload = {"episode_download": qualities_list}
         
         update_res = await client.patch(patch_url, json=payload, headers=SUPABASE_HEADERS)
 
         if update_res.status_code in [200, 204]:
             latest_file_cache[chat_id] = []
-            await update.message.reply_text(f"Success! ID {movie_id}-er Season {target_season}-er episode gulo safolkhae save hoyeche.")
+            await update.message.reply_text(f"Success! ID {movie_id}-এর [{quality_name}] কোয়ালিটি সফলভাবে সেভ হয়েছে।")
         else:
             update_text = getattr(update_res, 'text', str(update_res))
             await update.message.reply_text(f"Failed to update database: {update_text}")
@@ -128,7 +105,7 @@ def main():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.AUDIO, handle_message))
-    application.add_handler(CommandHandler("saveseason", save_season_command))
+    application.add_handler(CommandHandler("save", save_quality_command))
 
     application.run_polling()
 
