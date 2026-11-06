@@ -3,7 +3,7 @@ import requests
 from telebot import TeleBot
 
 # নতুন টোকেন এখানে বসিয়ে দেওয়া হলো
-TOKEN = "9129296107:AAEpi_AJvpErxn8ZLMlot-QwX2geNxqV9w012"
+TOKEN = "9129296107:AAE_DSbhwUqltnQycKwftUx7hhWcxvULLes"
 bot = TeleBot(TOKEN)
 
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
