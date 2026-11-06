@@ -1,6 +1,8 @@
 import os
 import logging
 import httpx
+from flask import Flask
+import threading
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -9,6 +11,18 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# --- Render-এর ফ্রি টিয়ারের পোর্ট বাইন্ডিং ঠিক রাখার জন্য ফ্লাস্ক সার্ভার ---
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return "Bot is active and running smoothly!", 200
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+# ------------------------------------------------------------------------
 
 # Supabase Credentials (Fetch from environment variables)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -107,10 +121,15 @@ def main():
         logger.error("BOT_TOKEN environment variable is missing!")
         return
 
+    # ব্যাকগ্রাউন্ডে ফ্লাস্ক সার্ভার রান করা যাতে রেন্ডার পোর্ট পেয়ে যায়
+    t = threading.Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
 
-    logger.info("Bot is starting up...")
+    logger.info("Bot is starting up with Flask Health Check...")
     application.run_polling()
 
 if __name__ == "__main__":
