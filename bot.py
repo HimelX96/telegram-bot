@@ -1,7 +1,21 @@
 import os
+import threading
 import requests
+from flask import Flask
 from telebot import TeleBot
 
+# ফ্লাস্ক অ্যাপ তৈরি করা (রেন্ডারের পোর্ট রিকোয়ারমেন্ট পূরণের জন্য)
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive and running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+# টেলিগ্রাম বট সেটআপ
 TOKEN = "8859026903:AAGIx3xypVJ_XASWBSjxWDjmYkdVE_SO5U4"
 bot = TeleBot(TOKEN)
 
@@ -9,6 +23,7 @@ SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 
 PRIVATE_CHANNEL_ID = -1004460747665  # তোমার প্রাইভেট চ্যানেলের আইডি
+
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     text_parts = message.text.split()
@@ -59,5 +74,9 @@ def handle_save(message):
       bot.reply_to(message, "⚠️ Please reply to the movie file/post with /save <movie_id>")
 
 if __name__ == '__main__':
-    print("Bot is starting in polling mode...")
+    # ফ্লাস্ক সার্ভার আলাদা থ্রেডে চালু করা যাতে পোলিং ব্লক না হয়
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.start()
+    
+    print("Bot is starting in polling mode with web server...")
     bot.infinity_polling()
