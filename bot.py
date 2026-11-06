@@ -79,5 +79,13 @@ def handle_save(message):
 def index():
     return "Piracy Vault Bot is running smoothly!"
 
+# ৪. অটো ওয়েবহুক সেট করার রুট (ব্রাউজারে শুধু একবার ভিজিট করলেই কাজ শেষ)
+@app.route('/set_webhook')
+def set_webhook():
+    webhook_url = f"https://telegram-bot-6mrg.onrender.com/{TOKEN}"
+    api_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_url}"
+    response = requests.get(api_url)
+    return response.json()
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
