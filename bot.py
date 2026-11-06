@@ -1,17 +1,15 @@
 import os
-from flask import Flask, request
+from flask import Flask
 import httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 app = Flask(__name__)
 
-# Environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # Ekhane Service Role Key use korbe
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # Service Role Key
 
-# Temporary memory to store recent file/album IDs per chat
 latest_file_cache = {}
 
 SUPABASE_HEADERS = {
@@ -21,14 +19,12 @@ SUPABASE_HEADERS = {
     "Prefer": "return=representation"
 }
 
+# 1. File cache kora
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     message = update.message
     
     file_id = None
-    media_group_id = message.media_group_id
-
-    # Check file type (Document, Video, Audio etc.)
     if message.document:
         file_id = message.document.file_id
     elif message.video:
@@ -40,66 +36,99 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chat_id not in latest_file_cache:
             latest_file_cache[chat_id] = []
         
-        # Jodi album ba ekadhik file ashe, list-e add hote thakbe
         if file_id not in latest_file_cache[chat_id]:
             latest_file_cache[chat_id].append(file_id)
         
         file_count = len(latest_file_cache[chat_id])
-        await message.reply_text(f"File cached! Total queued: {file_count}. Now send `/save <movie_id>` to store them sequentially.")
+        await message.reply_text(f"Cached! Total queued: {file_count}. Now send `/saveseason <id> <season_no> <start_ep>`")
 
-async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 2. Season-wise episode save korar command
+async def save_season_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
     if chat_id not in latest_file_cache or not latest_file_cache[chat_id]:
-        await update.message.reply_text("Kono file cache kora nei! Prothome file ba album forward karo.")
+        await update.message.reply_text("Kono file cache kora nei! Prothome episode gulo forward karo.")
         return
 
-    if not context.args:
-        await update.message.reply_text("Sothik niyome command dao! Uddahoron: `/save 23`", parse_mode="Markdown")
+    if len(context.args) < 3:
+        await update.message.reply_text("Sothik niyome command dao! Udahoron: `/saveseason <movie_id> <season_no> <start_ep>`\nJemon: `/saveseason 55 1 1`", parse_mode="Markdown")
         return
 
     movie_id = context.args[0]
-    new_file_ids = latest_file_cache[chat_id]
+    target_season = int(context.args[1])
+    start_ep = int(context.args[2])
+    
+    file_ids = latest_file_cache[chat_id]
 
-    # 1. Prothome database theke check korbo age ki data ache
-    get_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}&select=telegram_parts"
+    # Database theke purono JSON data anha
+    get_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}&select=episode_download"
     
     async with httpx.AsyncClient() as client:
         res = await client.get(get_url, headers=SUPABASE_HEADERS)
         
-        existing_parts = ""
+        seasons_list = []
         if res.status_code == 200 and res.json():
             row = res.json()[0]
-            existing_parts = row.get("telegram_parts") or ""
+            seasons_list = row.get("episode_download") or []
+            if not isinstance(seasons_list, list):
+                seasons_list = []
 
-        # 2. Purono parts er sathe notun file ID gulo comma diye serial-wise jure dibo
-        new_parts_str = ",".join(new_file_ids)
+        # 3. Target season khuje ber kora ba na thakle notun toiri kora
+        season_obj = None
+        for s in seasons_list:
+            if s.get("season_number") == target_season:
+                season_obj = s
+                break
         
-        if existing_parts:
-            # Jodi age thekei kisu thake, tar sathe comma diye notun gulo append hobe
-            updated_parts = f"{existing_parts},{new_parts_str}"
-        else:
-            updated_parts = new_parts_str
+        if not season_obj:
+            season_obj = {
+                "season_number": target_season,
+                "episodes": []
+            }
+            seasons_list.append(season_obj)
 
-        # 3. Supabase-e PATCH (Update) request pathabo
+        # 4. Episode gulo season-er `episodes` array-te serial-wise add kora
+        existing_episodes = season_obj.get("episodes", [])
+        
+        for index, f_id in enumerate(file_ids):
+            current_ep_num = start_ep + index
+            
+            # Jodi oi episode number age thekei thake, update kore dibo
+            ep_found = False
+            for ep in existing_episodes:
+                if ep.get("episode_number") == current_ep_num:
+                    ep["telegram_file_id"] = f_id
+                    ep_found = True
+                    break
+            
+            if not ep_found:
+                existing_episodes.append({
+                    "episode_number": current_ep_num,
+                    "telegram_file_id": f_id,
+                    "title": f"Season {target_season} Episode {current_ep_num}",
+                    "quality": "1080p REMUX"
+                })
+        
+        season_obj["episodes"] = existing_episodes
+
+        # 5. Supabase-e update (PATCH) kora
         patch_url = f"{SUPABASE_URL}/rest/v1/movies_vault?id=eq.{movie_id}"
-        payload = {"telegram_parts": updated_parts}
+        payload = {"episode_download": seasons_list}
         
         update_res = await client.patch(patch_url, json=payload, headers=SUPABASE_HEADERS)
 
         if update_res.status_code in [200, 204]:
-            # Cache clear kore dibo save howar por
             latest_file_cache[chat_id] = []
-            await update.message.reply_text(f"Success! Movie ID {movie_id}-e serial parts successfully save/update hoyeche: `{updated_parts}`", parse_mode="Markdown")
+            await update.message.reply_text(f"Success! ID {movie_id}-er Season {target_season}-er episode gulo safolkhae save hoyeche.")
         else:
-            await update.message.reply_text(f"Failed to update database: {update_res.text}")
+            update_text = getattr(update_res, 'text', str(update_res))
+            await update.message.reply_text(f"Failed to update database: {update_text}")
 
-# Telegram bot initialization setup (python-telegram-bot v20+)
 def main():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.AUDIO, handle_message))
-    application.add_handler(CommandHandler("save", save_command))
+    application.add_handler(CommandHandler("saveseason", save_season_command))
 
     application.run_polling()
 
